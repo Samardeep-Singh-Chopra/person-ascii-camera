@@ -1,1 +1,517 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Person ASCII Matrix</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js"></script>
+  <style>
+    :root {
+      --green: #00ff41;
+      --panel: rgba(0, 12, 4, 0.72);
+      font-family: "Courier New", Consolas, monospace;
+      color-scheme: dark;
+    }
+
+    * { box-sizing: border-box; }
+
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      color: var(--green);
+    }
+
+    body {
+      min-height: 100dvh;
+    }
+
+    canvas {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100dvh;
+      display: block;
+      background: #000;
+    }
+
+    video,
+    .hidden-canvas {
+      position: fixed;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .scanlines {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.5;
+      mix-blend-mode: screen;
+      background:
+        repeating-linear-gradient(
+          180deg,
+          rgba(0, 255, 65, 0.09) 0,
+          rgba(0, 255, 65, 0.09) 1px,
+          transparent 1px,
+          transparent 5px
+        ),
+        radial-gradient(circle at center, transparent 0 46%, rgba(0, 0, 0, 0.62) 100%);
+    }
+
+    .panel {
+      position: fixed;
+      left: 16px;
+      bottom: 16px;
+      z-index: 3;
+      width: min(420px, calc(100vw - 32px));
+      padding: 14px;
+      border: 1px solid rgba(0, 255, 65, 0.35);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 0 40px rgba(0, 255, 65, 0.14);
+      backdrop-filter: blur(12px);
+      display: grid;
+      gap: 12px;
+      transition: opacity 180ms ease, transform 180ms ease;
+    }
+
+    body.clean .panel {
+      opacity: 0;
+      transform: translateY(120%);
+      pointer-events: none;
+    }
+
+    .title {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    .status {
+      color: rgba(190, 255, 210, 0.78);
+      font-size: 11px;
+      font-weight: 400;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    label {
+      display: grid;
+      gap: 5px;
+      font-size: 11px;
+      color: rgba(190, 255, 210, 0.72);
+      text-transform: uppercase;
+    }
+
+    input,
+    select,
+    button {
+      font: inherit;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--green);
+    }
+
+    select,
+    button {
+      min-height: 36px;
+      border: 1px solid rgba(0, 255, 65, 0.4);
+      border-radius: 6px;
+      background: rgba(0, 20, 7, 0.86);
+      color: #e8fff0;
+      padding: 8px 10px;
+      cursor: pointer;
+    }
+
+    button:hover,
+    select:hover {
+      border-color: var(--green);
+      box-shadow: 0 0 18px rgba(0, 255, 65, 0.22);
+    }
+
+    .restore {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      z-index: 4;
+      display: none;
+    }
+
+    body.clean .restore {
+      display: block;
+    }
+
+    .message {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 5;
+      width: min(520px, calc(100vw - 40px));
+      padding: 16px;
+      text-align: center;
+      border: 1px solid rgba(0, 255, 65, 0.4);
+      background: rgba(0, 0, 0, 0.84);
+      color: rgba(220, 255, 228, 0.92);
+      border-radius: 8px;
+    }
+
+    .message.hidden {
+      display: none;
+    }
+
+    @media (max-width: 680px) {
+      .panel {
+        left: 10px;
+        bottom: 10px;
+        width: calc(100vw - 20px);
+      }
+    }
+  </style>
+</head>
+<body>
+  <video id="video" autoplay muted playsinline></video>
+  <canvas id="output"></canvas>
+  <canvas id="sample" class="hidden-canvas"></canvas>
+  <canvas id="mask" class="hidden-canvas"></canvas>
+  <div class="scanlines"></div>
+
+  <section class="panel">
+    <div class="title">
+      <span>PERSON ASCII MATRIX</span>
+      <span id="status" class="status">starting camera</span>
+    </div>
+    <div class="grid">
+      <label>
+        Mode
+        <select id="mode">
+          <option value="block">Block Matrix</option>
+          <option value="ascii">ASCII</option>
+          <option value="dot">Dot Matrix</option>
+        </select>
+      </label>
+      <label>
+        Color
+        <select id="colorMode">
+          <option value="matrix">Matrix Green</option>
+          <option value="neutral">Neutral White</option>
+          <option value="body">Body Colors</option>
+        </select>
+      </label>
+      <label>
+        Pixel Size <span id="pixelValue">8</span>
+        <input id="pixelSize" type="range" min="4" max="18" value="8" />
+      </label>
+      <label>
+        Threshold <span id="thresholdValue">48</span>
+        <input id="threshold" type="range" min="10" max="120" value="48" />
+      </label>
+      <label>
+        Brightness <span id="brightnessValue">1.25</span>
+        <input id="brightness" type="range" min="0.5" max="2.4" step="0.05" value="1.25" />
+      </label>
+      <label>
+        Contrast <span id="contrastValue">1.45</span>
+        <input id="contrast" type="range" min="0.7" max="2.8" step="0.05" value="1.45" />
+      </label>
+      <button id="shot" type="button">Screenshot</button>
+      <button id="hide" type="button">Hide UI</button>
+    </div>
+  </section>
+
+  <button id="restore" class="restore" type="button">Show UI</button>
+  <p id="message" class="message">Allow camera access. The first few seconds may calibrate the person mask.</p>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const video = document.getElementById("video");
+      const output = document.getElementById("output");
+      const sample = document.getElementById("sample");
+      const mask = document.getElementById("mask");
+      const ctx = output.getContext("2d", { alpha: false, desynchronized: true });
+      const sampleCtx = sample.getContext("2d", { willReadFrequently: true });
+      const maskCtx = mask.getContext("2d", { willReadFrequently: true });
+      const status = document.getElementById("status");
+      const message = document.getElementById("message");
+
+      const controls = {
+        mode: document.getElementById("mode"),
+        colorMode: document.getElementById("colorMode"),
+        pixelSize: document.getElementById("pixelSize"),
+        threshold: document.getElementById("threshold"),
+        brightness: document.getElementById("brightness"),
+        contrast: document.getElementById("contrast")
+      };
+
+      const chars = " .^!*<&%$#@";
+      let segmenter = null;
+      let segmentationBusy = false;
+      let hasMask = false;
+      let lastSegmentation = 0;
+      let prev = new Float32Array(0);
+      let dpr = 1;
+      let phase = 0;
+
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+      }
+
+      function fitSource(sourceW, sourceH, targetW, targetH) {
+        const sourceRatio = sourceW / sourceH;
+        const targetRatio = targetW / targetH;
+        let sx = 0;
+        let sy = 0;
+        let sw = sourceW;
+        let sh = sourceH;
+
+        if (sourceRatio > targetRatio) {
+          sw = sourceH * targetRatio;
+          sx = (sourceW - sw) / 2;
+        } else {
+          sh = sourceW / targetRatio;
+          sy = (sourceH - sh) / 2;
+        }
+
+        return { sx, sy, sw, sh };
+      }
+
+      function resize() {
+        dpr = Math.min(window.devicePixelRatio || 1, 1.25);
+        output.width = Math.floor(window.innerWidth * dpr);
+        output.height = Math.floor(window.innerHeight * dpr);
+        output.style.width = `${window.innerWidth}px`;
+        output.style.height = `${window.innerHeight}px`;
+      }
+
+      function updateLabels() {
+        document.getElementById("pixelValue").textContent = controls.pixelSize.value;
+        document.getElementById("thresholdValue").textContent = controls.threshold.value;
+        document.getElementById("brightnessValue").textContent = Number(controls.brightness.value).toFixed(2);
+        document.getElementById("contrastValue").textContent = Number(controls.contrast.value).toFixed(2);
+      }
+
+      function colorFor(mode, r, g, b, alpha) {
+        if (mode === "matrix") return `rgba(0,255,65,${alpha})`;
+        if (mode === "neutral") {
+          const c = Math.round(205 + alpha * 50);
+          return `rgba(${c},${c},${Math.min(255, c + 8)},${alpha})`;
+        }
+        return `rgba(${clamp(r * 1.08 + 10, 0, 255)},${clamp(g * 1.02 + 4, 0, 255)},${clamp(b * 0.92, 0, 255)},${alpha})`;
+      }
+
+      function drawVideoToSmallCanvas(cols, rows) {
+        if (sample.width !== cols || sample.height !== rows) {
+          sample.width = cols;
+          sample.height = rows;
+          mask.width = cols;
+          mask.height = rows;
+          prev = new Float32Array(cols * rows);
+          hasMask = false;
+        }
+
+        const { sx, sy, sw, sh } = fitSource(video.videoWidth, video.videoHeight, cols, rows);
+        sampleCtx.save();
+        sampleCtx.clearRect(0, 0, cols, rows);
+        sampleCtx.translate(cols, 0);
+        sampleCtx.scale(-1, 1);
+        sampleCtx.drawImage(video, sx, sy, sw, sh, 0, 0, cols, rows);
+        sampleCtx.restore();
+      }
+
+      async function updateSegmentation(now) {
+        if (!segmenter || segmentationBusy || now - lastSegmentation < 66) return;
+        segmentationBusy = true;
+        lastSegmentation = now;
+        try {
+          await segmenter.send({ image: video });
+        } catch (error) {
+          console.error(error);
+        } finally {
+          segmentationBusy = false;
+        }
+      }
+
+      function render(now = 0) {
+        requestAnimationFrame(render);
+        if (!video.videoWidth || !video.videoHeight) return;
+
+        phase += 0.04;
+        resize();
+
+        const pixel = Number(controls.pixelSize.value) * dpr;
+        const cellW = Math.max(3, pixel);
+        const cellH = controls.mode.value === "ascii" ? cellW * 1.45 : cellW;
+        const cols = Math.ceil(output.width / cellW);
+        const rows = Math.ceil(output.height / cellH);
+
+        drawVideoToSmallCanvas(cols, rows);
+        updateSegmentation(now);
+
+        const frame = sampleCtx.getImageData(0, 0, cols, rows).data;
+        const matte = hasMask ? maskCtx.getImageData(0, 0, cols, rows).data : null;
+        const threshold = Number(controls.threshold.value);
+        const brightnessGain = Number(controls.brightness.value);
+        const contrast = Number(controls.contrast.value);
+        const colorMode = controls.colorMode.value;
+        const mode = controls.mode.value;
+
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, output.width, output.height);
+        ctx.globalCompositeOperation = "lighter";
+        ctx.shadowBlur = 0;
+
+        if (mode === "ascii") {
+          ctx.font = `${Math.max(6, cellH * 0.9)}px "Courier New", monospace`;
+          ctx.textBaseline = "top";
+        }
+
+        for (let y = 0; y < rows; y += 1) {
+          let rowText = "";
+          for (let x = 0; x < cols; x += 1) {
+            const i = y * cols + x;
+            const p = i * 4;
+            const maskValue = matte ? matte[p] : 255;
+
+            if (maskValue < threshold) {
+              prev[i] *= 0.55;
+              if (mode === "ascii") rowText += " ";
+              continue;
+            }
+
+            const r = frame[p];
+            const g = frame[p + 1];
+            const b = frame[p + 2];
+            let luma = r * 0.2126 + g * 0.7152 + b * 0.0722;
+            luma = (luma - 128) * contrast + 128;
+            luma = clamp(luma * brightnessGain, 0, 255);
+
+            const normalized = Math.pow(luma / 255, 0.78) * (maskValue / 255);
+            prev[i] = prev[i] * 0.68 + normalized * 0.32;
+            const v = prev[i];
+
+            if (v < 0.05) {
+              if (mode === "ascii") rowText += " ";
+              continue;
+            }
+
+            const alpha = clamp(0.12 + v * 1.05, 0, 1);
+            const fill = colorFor(colorMode, r, g, b, alpha);
+
+            if (mode === "ascii") {
+              const charIndex = clamp(Math.floor(v * (chars.length - 1)), 0, chars.length - 1);
+              rowText += chars[charIndex];
+            } else if (mode === "dot") {
+              ctx.fillStyle = fill;
+              ctx.beginPath();
+              ctx.arc(x * cellW + cellW * 0.5, y * cellH + cellH * 0.5, cellW * (0.12 + v * 0.34), 0, Math.PI * 2);
+              ctx.fill();
+            } else {
+              const scan = 0.9 + Math.sin(y * 0.55 + phase) * 0.08;
+              const barW = cellW * (0.22 + v * 0.82);
+              const barH = Math.max(1.5, cellH * (0.18 + v * 0.42));
+              ctx.fillStyle = fill;
+              ctx.fillRect(
+                x * cellW + (cellW - barW) * 0.5,
+                y * cellH + (cellH - barH) * 0.5,
+                barW * scan,
+                barH
+              );
+            }
+          }
+
+          if (mode === "ascii") {
+            ctx.fillStyle = colorFor(colorMode, 230, 245, 230, 0.95);
+            ctx.fillText(rowText, 0, y * cellH);
+          }
+        }
+
+        ctx.globalCompositeOperation = "source-over";
+      }
+
+      async function start() {
+        try {
+          if (!window.SelfieSegmentation) {
+            throw new Error("MediaPipe SelfieSegmentation failed to load.");
+          }
+
+          segmenter = new window.SelfieSegmentation({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
+          });
+          segmenter.setOptions({
+            modelSelection: 1,
+            selfieMode: true,
+          });
+          segmenter.onResults((results) => {
+            if (!results.segmentationMask || !mask.width || !mask.height) return;
+            const { sx, sy, sw, sh } = fitSource(video.videoWidth, video.videoHeight, mask.width, mask.height);
+            maskCtx.clearRect(0, 0, mask.width, mask.height);
+            // MediaPipe's selfieMode already mirrors the segmentation mask.
+            // The visible sample feed is mirrored too, so drawing the mask directly keeps both aligned.
+            maskCtx.drawImage(results.segmentationMask, sx, sy, sw, sh, 0, 0, mask.width, mask.height);
+            hasMask = true;
+            status.textContent = "person mask active";
+          });
+
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+              facingMode: "user",
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+              frameRate: { ideal: 24, max: 30 }
+            }
+          });
+          video.srcObject = stream;
+          await video.play();
+          status.textContent = "camera live";
+          message.classList.add("hidden");
+          requestAnimationFrame(render);
+        } catch (error) {
+          console.error(error);
+          status.textContent = "camera error";
+          message.textContent = "Camera or segmentation failed. Run this from localhost/HTTPS and allow camera access.";
+        }
+      }
+
+      Object.values(controls).forEach((control) => {
+        control.addEventListener("input", updateLabels);
+        control.addEventListener("change", updateLabels);
+      });
+
+      document.getElementById("shot").addEventListener("click", () => {
+        const link = document.createElement("a");
+        link.href = output.toDataURL("image/png");
+        link.download = `person-ascii-${Date.now()}.png`;
+        link.click();
+      });
+
+      document.getElementById("hide").addEventListener("click", () => document.body.classList.add("clean"));
+      document.getElementById("restore").addEventListener("click", () => document.body.classList.remove("clean"));
+      window.addEventListener("resize", resize, { passive: true });
+
+      updateLabels();
+      resize();
+      start();
+    })();
+  </script>
+</body>
+</html>
 
